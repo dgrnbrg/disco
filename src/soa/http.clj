@@ -3,7 +3,7 @@
             [compojure.core :refer (GET)]
             [clj-http.client :as http]
             [clj-http.core]
-            [soa.core :as sd]
+            [soa.service-discovery :as sd]
             [clojure.core.async :as async]))
 
 (def probe-route

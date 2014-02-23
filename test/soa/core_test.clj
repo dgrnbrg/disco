@@ -4,7 +4,7 @@
             [clj-http.client :as http]
             [compojure.core :refer (GET)]
             [soa.http :refer :all]  
-            [soa.core :refer :all])
+            [soa.service-discovery :refer :all])
   (:import [org.apache.curator.framework CuratorFramework]
            [org.apache.curator.test TestingServer]))
 
