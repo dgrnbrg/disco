@@ -4,6 +4,10 @@
            [org.apache.curator.x.discovery.details ServiceCacheListener]
            [org.apache.curator.x.discovery ServiceDiscoveryBuilder ServiceInstance ServiceDiscovery ServiceCache]))
 
+(defn close
+  [^java.io.Closeable c]
+  (.close c))
+
 (defn make-curator
   "Simple curator creation fn"
   [zkservers]

@@ -1,6 +1,8 @@
 (ns soa.core-test
   (:require [clojure.test :refer :all]
             [org.httpkit.server :as httpkit]
+            [clojure.java.io :as io]
+            [soa.nginx]
             [clj-http.client :as http]
             [compojure.core :refer (GET)]
             [soa.http :refer :all]  
@@ -24,7 +26,7 @@
                              :port port)
         server (httpkit/run-server
                  (-> (GET "/test" []
-                          "success!")
+                          (str "success! [" name " on " port "]") )
                      (ring-probe-middleware)
                      (ring-latency-middleware latency))
                  {:port port})]
@@ -33,7 +35,8 @@
       (unregister-service discovery si)
       (server))))
 
-(deftest sd-test
+(defn create-test-sd
+  []
   (let [test-service (TestingServer. 2181)
         curator (make-curator (.getConnectString test-service))
         sd (make-service-discovery curator "/sd")
@@ -41,6 +44,41 @@
         s2 (serve sd "blammo" 2223 0)
         s3 (serve sd "blammo" 2224 500)
         s4 (serve sd "frob" 2225 0)]
+    {:zk test-service
+     :curator curator
+     :sd sd
+     :services [s1 s2 s3 s4]}))
+
+(defn close-test-sd
+  [{:keys [curator services sd zk]}]
+  (doseq [s services] (s))
+  (close curator)
+  (close zk))
+
+(comment
+  (let [s (create-test-sd)]
+    (def sd (:sd s))
+    (def services s))
+
+  (def frob2 (serve sd "frob" 2226 0))
+  (frob2)
+
+  (close-test-sd services)
+
+  (def nginx
+    (soa.nginx/run-nginx
+      sd
+      soa.nginx/default-template
+      {:frob {:path "/"}}
+      "/Users/dgrnbrg/soa/nginx.conf"
+      "/usr/local/bin/nginx"))
+
+  (nginx)
+
+  )
+
+(deftest sd-test
+  (let [{:keys [sd] :as services} (create-test-sd)]
 
     (try
       (Thread/sleep 250)
@@ -49,16 +87,16 @@
       (is (= 1 (count (service-members sd "frob"))))
 
       (with-probe-middleware
-        (is (= "success!" (:body (http/get
-                                   "disco://frob/test"
-                                   {:discovery sd
-                                    :max-concurrent-probes 2}))))
+        (is (re-find #"^success!" (:body (http/get
+                                           "disco://frob/test"
+                                           {:discovery sd
+                                            :max-concurrent-probes 2}))))
 
-        (is (= "success!" (:body (http/get
-                                   "disco://blammo/test"
-                                   {:discovery sd
-                                    :max-concurrent-probes 2}))))
-        
+        (is (re-find #"^success!" (:body (http/get
+                                           "disco://blammo/test"
+                                           {:discovery sd
+                                            :max-concurrent-probes 2}))))
+
         (let [port (atom {})]
           (dotimes [i 100]
             (swap! port update-in [(-> (http/get
@@ -72,12 +110,36 @@
           ;; Test load balancing and routing around slow endpoint
           (is (>= (get @port 2222) 20))
           (is (>= (get @port 2223) 20))
-          (is (= 0 (get @port 2224 0)))))
+          (is (= 0 (get @port 2224 0))))
 
+        (let [nginx-bin "/usr/local/bin/nginx"
+              nginx-conf (.getAbsolutePath (io/file "nginx.conf"))
+              nginx
+              (soa.nginx/run-nginx
+                sd
+                soa.nginx/default-template
+                {:frob {:path "/"}}
+                nginx-conf
+                nginx-bin)
+              proc (.start (ProcessBuilder. [nginx-bin "-c" nginx-conf]))
+              num-uniq (fn []
+                         (let [a (atom #{})]
+                           (dotimes [i 10]
+                             (swap! a conj
+                                    (:body (http/get
+                                             "http://localhost:10000/test"))))
+                           @a))]
+          (try
+            (Thread/sleep 250)
+            (is (= 1 (count (num-uniq))))
+            (let [s' (serve sd "frob" 2226 0)]
+              (Thread/sleep 50)
+              (is (= 2 (count (num-uniq))))
+              (s'))
+            (Thread/sleep 50)
+            (is (= 1 (count (num-uniq))))
+            (finally
+              (.destroy proc)
+              (nginx)))))
       (finally
-        (s1)
-        (s2)
-        (s3)
-        (s4)
-        (.close ^CuratorFramework curator)
-        (.stop test-service)))))
+        (close-test-sd services)))))
