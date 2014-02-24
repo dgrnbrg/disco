@@ -1,10 +1,10 @@
-(ns soa.nginx
-  (:require soa.http
+(ns disco.nginx
+  (:require disco.http
             [clojure.java.io :as io]
             [clojure.tools.logging :as log]
             [clojure.java.shell :as sh]
             [clostache.parser :refer (render)]
-            [soa.service-discovery :as sd]))
+            [disco.service-discovery :as sd]))
 
 (defn create-caches-for-config
   [discovery config]
@@ -13,7 +13,7 @@
 
 (def default-template (slurp (io/resource "nginx-template.conf")))
 
-#_(spit "/Users/dgrnbrg/soa/nginx.conf" (doto (render default-template
+#_(spit "/Users/dgrnbrg/disco/nginx.conf" (doto (render default-template
         {:service
          [{:name "frobulator"
            :path "/frob"

@@ -1,12 +1,12 @@
-(ns soa.core-test
+(ns disco.core-test
   (:require [clojure.test :refer :all]
             [org.httpkit.server :as httpkit]
             [clojure.java.io :as io]
-            [soa.nginx]
+            [disco.nginx]
             [clj-http.client :as http]
             [compojure.core :refer (GET)]
-            [soa.http :refer :all]  
-            [soa.service-discovery :refer :all])
+            [disco.http :refer :all]  
+            [disco.service-discovery :refer :all])
   (:import [org.apache.curator.framework CuratorFramework]
            [org.apache.curator.test TestingServer]))
 
@@ -66,11 +66,11 @@
   (close-test-sd services)
 
   (def nginx
-    (soa.nginx/run-nginx
+    (disco.nginx/run-nginx
       sd
-      soa.nginx/default-template
+      disco.nginx/default-template
       {:frob {:path "/"}}
-      "/Users/dgrnbrg/soa/nginx.conf"
+      "/Users/dgrnbrg/disco/nginx.conf"
       "/usr/local/bin/nginx"))
 
   (nginx)
@@ -115,9 +115,9 @@
         (let [nginx-bin "/usr/local/bin/nginx"
               nginx-conf (.getAbsolutePath (io/file "nginx.conf"))
               nginx
-              (soa.nginx/run-nginx
+              (disco.nginx/run-nginx
                 sd
-                soa.nginx/default-template
+                disco.nginx/default-template
                 {:frob {:path "/"}}
                 nginx-conf
                 nginx-bin)

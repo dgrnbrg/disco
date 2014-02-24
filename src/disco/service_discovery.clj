@@ -1,4 +1,4 @@
-(ns soa.service-discovery
+(ns disco.service-discovery
   (:import [org.apache.curator.framework CuratorFrameworkFactory]
            [org.apache.curator.retry RetryNTimes]
            [org.apache.curator.x.discovery.details ServiceCacheListener]

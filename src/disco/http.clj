@@ -1,9 +1,9 @@
-(ns soa.http
+(ns disco.http
   (:require [ring.util.response :refer (response status)]
             [compojure.core :refer (GET)]
             [clj-http.client :as http]
             [clj-http.core]
-            [soa.service-discovery :as sd]
+            [disco.service-discovery :as sd]
             [clojure.core.async :as async]))
 
 (def probe-route
