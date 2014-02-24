@@ -55,6 +55,9 @@
   (close curator)
   (close zk))
 
+;;;
+;;; This comment provides all you need to use the repl to control disco
+;;;
 (comment
   (let [s (create-test-sd)]
     (def sd (:sd s))
@@ -65,12 +68,21 @@
 
   (close-test-sd services)
 
+  (def nginx-conf (.getAbsolutePath (io/file "nginx.conf")))
+
+  (spit nginx-conf (doto (render default-template
+                                 {:service
+                                  [{:name "frobulator"
+                                    :path "/frob"
+                                    :server [{:address "localhost" :port 2222}
+                                             {:address "localhost" :port 2223}]}]}) println))
+
   (def nginx
     (disco.nginx/run-nginx
       sd
       disco.nginx/default-template
       {:frob {:path "/"}}
-      "/Users/dgrnbrg/disco/nginx.conf"
+      nginx-conf
       "/usr/local/bin/nginx"))
 
   (nginx)
