@@ -6,12 +6,18 @@
             [disco.service-discovery :as sd]
             [clojure.core.async :as async]))
 
+;; TODO: consider automatic batching layer for commands (requires more sophisticated LB)
+
 (def probe-route
   (GET "/probe" [] (-> (response "")
                        (status 204))))
 
 (defn ring-probe-middleware
   "Adds a ring route for /probe, which is used to admit new requests"
+  ;; TODO: add option for max concurrency
+  ;; requires registering the set of outstanding reqs and unregistering
+  ;; them after they process
+  ;; perhaps the probe should include a lease id
   [h]
   (fn [req]
     (or (probe-route req) (h req))))

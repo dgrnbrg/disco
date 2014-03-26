@@ -1,5 +1,6 @@
 (ns disco.nginx
   (:require disco.http
+            [disco.curator :as curator]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log]
             [clojure.java.shell :as sh]
@@ -50,7 +51,7 @@
         _ (write-file)
         close-delay (delay
                       (doseq [[_ {:keys [cache]}] service-caches]
-                        (sd/close cache)))]
+                        (curator/close cache)))]
     (doseq [[_ {:keys [cache]}] service-caches]
       (sd/service-cache-listen
         cache #(write-file)))

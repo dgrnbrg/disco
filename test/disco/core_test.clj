@@ -6,7 +6,8 @@
             [clj-http.client :as http]
             [compojure.core :refer (GET)]
             [disco.http :refer :all]  
-            [disco.service-discovery :refer :all])
+            [disco.service-discovery :refer :all]
+            [disco.curator :refer :all])
   (:import [org.apache.curator.framework CuratorFramework]
            [org.apache.curator.test TestingServer]))
 
@@ -57,7 +58,7 @@
 
 ;;;
 ;;; This comment provides all you need to use the repl to control disco
-;;;
+;
 (comment
   (let [s (create-test-sd)]
     (def sd (:sd s))

@@ -1,18 +1,6 @@
 (ns disco.service-discovery
-  (:import [org.apache.curator.framework CuratorFrameworkFactory]
-           [org.apache.curator.retry RetryNTimes]
-           [org.apache.curator.x.discovery.details ServiceCacheListener]
+  (:import [org.apache.curator.x.discovery.details ServiceCacheListener]
            [org.apache.curator.x.discovery ServiceDiscoveryBuilder ServiceInstance ServiceDiscovery ServiceCache]))
-
-(defn close
-  [^java.io.Closeable c]
-  (.close c))
-
-(defn make-curator
-  "Simple curator creation fn"
-  [zkservers]
-  (doto (CuratorFrameworkFactory/newClient zkservers 10000 60000 (RetryNTimes. 10 1000))
-    (.start)))
 
 (defn make-service-discovery
   "Returns a service discovery rooted at the given location"
@@ -58,6 +46,9 @@
 
 (defn service-instance
   "Creates a service instance object."
+  ;;TODO: should support including a path so that many services can
+  ;;share one httpkit/jetty server
+  ;;this requires implementing the serializer
   [& {:as settings}]
   (builder-helper (ServiceInstance/builder) settings
                   [address
