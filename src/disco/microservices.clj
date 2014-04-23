@@ -3,9 +3,11 @@
             [org.httpkit.client :as client]
             [org.httpkit.server :as server]
             [taoensso.nippy :as nippy]
+            [disco.service-discovery :as sd]
             [clojure.java.io :as io]
             [clojure.edn :as edn])
   (:import java.util.concurrent.atomic.AtomicBoolean
+           org.apache.curator.x.discovery.ServiceDiscovery
            java.util.ArrayList))
 
 (def ^:dynamic *local* false)
@@ -42,12 +44,13 @@
       (.lazySet delivered? true)
       (deliver p r)  
       (doseq [l listeners]
-        (l))))
+        (l)))
+    (.clear listeners))
   IListen
   (add-listener [_ f]
     (locking delivered?
       (if (.get delivered?)
-        (f)  
+        (f)
         (.add listeners f)))))
 
 (def decoders
@@ -71,18 +74,34 @@
                    (assoc meta-map :method :post)
                    meta-map)
         name-str (name name-sym)
-        internal-name (gensym )
-        name-sym (with-meta name-sym (assoc meta-map ::impl internal-name))]
+        internal-name (gensym name-str)
+        name-sym (with-meta name-sym (assoc meta-map
+                                            ::impl internal-name
+                                            ::service-fn true))]
     `(do
        (defn ~internal-name ~@fntail)
        (defn ~name-sym
-       [& args#]
-       (cond *remote*
-             (remote-call (var ~(symbol (name (ns-name *ns*)) (name name-sym))) args#)
-             *local*
-             (MockFuture. (apply ~internal-name args#))
-             :else
-             (throw (ex-info "Please set *local* or *remote* to call a service fn" {:local *local* :remote *remote*})))))))
+         [& args#]
+         (cond *remote*
+               (remote-call (var ~(symbol (name (ns-name *ns*)) (name name-sym))) args#)
+               *local*
+               (MockFuture. (apply ~internal-name args#))
+               :else
+               (throw (ex-info "Please set *local* or *remote* to call a service fn" {:local *local* :remote *remote*})))))))
+
+(defn get-uri-from-remote
+  [ns name]
+  (let [string-path (str (ns-name ns) \/ name)
+        remote *remote*]
+    (cond (string? remote) (str remote string-path)
+          (instance? ServiceDiscovery remote)
+          (let [members (sd/service-members remote string-path)
+                _ (when (empty? members)
+                    (throw (ex-info "There are no service members"
+                                    {:path string-path
+                                     :remote remote})))
+                {:keys [address port]} (rand-nth members)]
+            (str "http://" address \: port "/methods/" string-path)))))
 
 (defn remote-call
   [service-var args]
@@ -91,8 +110,10 @@
       (throw (ex-info "unimplemented: get" {:var service-var :args args}))
       (let [{:keys [ns name]} (meta service-var)
             content-type "application/edn"
-            result (ListenablePromise. (promise) (ArrayList.) (AtomicBoolean.))]
-        (client/post (str *remote* (ns-name ns) \/ (str name))
+            result (ListenablePromise. (promise) (ArrayList.) (AtomicBoolean.))
+            uri (get-uri-from-remote ns name)]
+        ;; TODO build retry strategy
+        (client/post uri
                      {:body ((get encoders content-type) args)
                       :headers  {"Content-Type" content-type
                                  "Accept" "application/x-nippy"}}
@@ -105,34 +126,6 @@
                                                          ::map resp)
                                                   r)))))
         result))))
-
-(comment
-  (def http-kit (server/run-server #'app {:port 8090}))
-  (http-kit)
-
-  (throw (nippy/thaw (nippy/freeze (try (throw (ex-info "lol" {})) (catch Exception e e)))))
-
-  (def app (make-ring-handler (fn [h] {:body "oops" :status 500}) "/methods" [#'bar]))
-  (try
-    (binding [*remote* "http://localhost:8090/methods/"]
-    (deref (bar 1 2 7) 1000 :fail)
-    (let [r (bar 1 2 3)]
-      (add-listener r (fn [] (println "Got an answer!" @r)))
-      @r
-      (add-listener r (fn [] (println "2nd instantly!" @r)))
-      ))
-    (catch Exception e
-      (println (ex-data e))
-      (clojure.stacktrace/print-cause-trace e)))
-  )
-
-(defn make-descriptor
-  [service-var]
-  (let [meta-map (meta service-var)
-        method (get meta-map :method :post)
-
-        ])
-  )
 
 (defn decode-post-args
   [request]
@@ -154,7 +147,9 @@
      :headers {"Content-Type" accept}}))
 
 (defn make-ring-handler
-  [handler root descriptors]
+  "Takes a next-level handler, a mount point for the microservices
+   (usually /methods), the service vars to expose"
+  [handler root service-vars]
   (let [regex (re-pattern (str root "/([^/]+)/(.+)"))]
     (fn [request]
       (let [[_ ns name] (re-matches regex (:uri request))]
@@ -164,13 +159,14 @@
                                    (let [{ns' :ns name' :name} (meta target)]
                                      (when (and (= ns (str (ns-name ns'))) (= name (str name')))
                                        target)))
-                                 descriptors)]
+                                 service-vars)]
               (if (= (:request-method request) (-> match meta :method))
                 (let [args (if (= :get (-> match meta :method))
                              (decode-get-args request)
                              (decode-post-args request))
                       result (binding [*local* true]
                                (try
+                                 ;; TODO handle async responses
                                  @(apply match args)
                                  (catch Exception e
                                    {::error e})))]
@@ -189,17 +185,50 @@
                :status 500}))
           (handler request))))))
 
-(defn register-descriptors
-  [descriptors port & {:keys [host]}]
-  )
-
-(defn make-ns-desciptors
-  [ns]
-  )
+(defn service-var-to-service
+  "This converts a service var into a Service, for use with curator service discovery.
+   
+   See disco.service-discovery/service-instance for more service-args"
+  [service-var & {:as service-args}]
+  (let [m (meta service-var)
+        ns (str (ns-name (:ns m)))
+        n (str (:name m))]
+    (when (:name service-args)
+      (throw (ex-info "Service args shouldn't have a :name"
+                      {:name service-args})))
+    (apply sd/service-instance :name (str ns \/ n)
+           (apply concat service-args))))
 
 (defn serve-ns
-  [ns]
-  )
+  [service-discovery ns-symbol]
+  (let [vars (->> (ns-map (find-ns ns-symbol))
+                  (filter (fn [kv] (and (-> kv val var?)
+                                        (-> kv val meta ::service-fn))))
+                  (map val))
+        _ (when (empty? vars)
+            (throw (ex-info "There are no service fns in the namespace"
+                            {:ns-symbol ns-symbol
+                             :ns (find-ns ns-symbol)})))
+        ;; TODO retry server until port found
+        port (+ 10000 (rand-int 5000))
+        server (server/run-server (make-ring-handler
+                                    (fn [r]
+                                      {:body "error - no defined handler"
+                                       :status 404})
+                                    "/methods"
+                                    vars)
+                                  {:port port})
+        host "localhost" #_(.getHostName (java.net.InetAddress/getLocalHost))
+        services (service-var-to-service v
+                                         :address host
+                                         :port port)]
+    (doseq [s services]
+      (sd/register-service service-discovery s))
+    (fn close []
+      (doseq [s services]
+        ;;TODO unregister doesn't work
+        (sd/unregister-service service-discovery s))
+      (server))))
 
 #_(clojure.pprint/pprint (clojure.walk/macroexpand-all
   '(defservicefn foo
@@ -219,8 +248,34 @@
   "Does cool stuff"
   [x y z]
   (println "bye bye")
-  (throw (ex-info "lol side" {:remote *remote* :local *local*}))
+  ;(throw (ex-info "lol side" {:remote *remote* :local *local*}))
   (+ x y z)
   )
 
 ;(binding [*local* true] (add-listener (foo 1 2 3) (fn [] (println "yay!"))))
+
+(comment
+  (def http-kit (server/run-server #'app {:port 8090}))
+  (http-kit)
+
+  (throw (nippy/thaw (nippy/freeze (try (throw (ex-info "lol" {})) (catch Exception e e)))))
+
+  (def app (make-ring-handler (fn [h] {:body "oops" :status 500}) "/methods" [#'bar]))
+  (try
+    (binding [*remote* "http://localhost:8090/methods/"]
+    (deref (bar 1 2 7) 1000 :fail)
+    (let [r (bar 1 2 3)]
+      (add-listener r (fn [] (println "Got an answer!" @r)))
+      @r
+      (add-listener r (fn [] (println "2nd instantly!" @r)))
+      ))
+    (catch Exception e
+      (println (ex-data e))
+      (clojure.stacktrace/print-cause-trace e)))
+
+  (def server (serve-ns disco.core-test/sd 'disco.microservices))
+  (server)
+  (binding [*remote* disco.core-test/sd]
+    (deref (bar 1 2 3) 100 :fail)
+    )
+  )

@@ -15,4 +15,6 @@
                  [org.clojure/core.async "0.1.267.0-0d7780-alpha"]
                  [org.apache.curator/curator-test "2.4.0"]  
                  [org.apache.curator/curator-x-discovery "2.4.0"]
+                 [http-kit "2.1.16"]
+                 [com.taoensso/nippy "2.6.2"]
                  [com.datomic/datomic-free "0.9.4572"]])
