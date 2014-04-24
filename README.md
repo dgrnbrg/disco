@@ -14,19 +14,33 @@ take a closer look.
 ```clojure
 (require '[disco.microservices :as m])
 
+;; Define a new servicefn. It implicitly returns a listenable future.
 (m/defservicefn product
  [x y z]
  (* x y z))
 
+;; Do a local call
 (binding [m/*local* true]
+  ;; Get a future with the result
   (let [result (product 1 2 3)]
+    ;; Add a callback to be notified when finished
     (m/add-listener result #(println "Got a result!"))
+    ;; Can use deref to get the result
     @result))
+
+;; Alternatively, just use like a normal function call
+(binding [m/*local* true]
+  ;; Just get value
+  @(product 1 2 3))
 ```
 
 Here we can see how to define a servicefn (exactly like a regular `fn`), and how to call it. We can
 tell it to use the `*local*` execution context via the `binding`. If we do not provide a context, it
 will throw an exception.
+
+The return value is always a listenable future, which can be `deref`ed and you can add listeners to.
+These listeners are guaranteed to run if the result was delivered, either previously or in the future.
+Compare this to `add-watch`, which only runs if the result has not been delivered yet.
 
 ### Automatic service discovery
 
@@ -41,8 +55,10 @@ This functions takes a `CuratorFramework` as an argument, which can be created b
 `disco.curator/make-curator`. You'll need a ZooKeeper cluster for this.
 
 ```clojure
+;; Create and register all the plumbing to export all servicefns in ns via service-discovery
 (m/serve-ns service-discovery 'ns.with.services)
 
+;; When calling a remote, the remote can be a Curator ServiceDiscovery
 (binding [m/*remote* service-discovery]
   (let [result (product 1 2 3)]
     (m/add-listener result #(println "Got a result!"))
@@ -61,11 +77,13 @@ What if you wanted to include the rpc routes as a ring middleware for your own i
 You can do this, as well as specify the exact uri for the RPC to target.
 
 ```clojure
+;; Define a ring handler
 (def app (-> (fn [req] {:status 500 :body ""})
              (m/make-ring-handler "/methods" [#'product])))
 
 ;; host #'app in a ring server
 
+;; A remote can be a direct reference to a URL
 (binding [m/*remote* "http://uri/to/app/methods/"]
   (let [result (product 1 2 3)]
     (m/add-listener result #(println "Got a result!"))
@@ -90,6 +108,7 @@ that implements IDeref (such as `future`s and `promise`s) into a listenable futu
 calling `disco.microservices/ideref->listenable-future`.
 
 ```clojure
+;; Note that the channel returned by the go block must be converted to a listenable future
 (m/defservicefn ^:async product
   [x y z]
   (-> (clojure.core.async/go (* x y z))
