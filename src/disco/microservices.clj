@@ -80,6 +80,11 @@
     (future (deliver-result f @ideref))
     f))
 
+(defn deferred-exception
+  "Wraps an exception into a special sentinal object"
+  [ex]
+  {::error ex})
+
 (declare remote-call)
 
 (defmacro defservicefn
@@ -166,6 +171,39 @@
      :status 200
      :headers {"Content-Type" accept}}))
 
+(defn search-vars
+  "Does linear scan of the given service vars to see"
+  [service-vars ns name]
+  (some (fn [target]
+          (let [{ns' :ns name' :name} (meta target)]
+            (when (and (= ns (str (ns-name ns'))) (= name (str name')))
+              target)))
+        service-vars))
+
+(defn decode-args
+  [request]
+  (if (= :get (:request-method request))
+    (decode-get-args request)
+    (decode-post-args request)))
+
+(defn apply-local-service-var
+  [var args]
+  (binding [*local* true]
+    (try
+      (apply var args)
+      (catch Exception e
+        (MockFuture. (deferred-exception e))))))
+
+(defn listenable-future->http-kit-async-result
+  [request result]
+  (server/with-channel request channel
+    (add-listener
+      result
+      (fn []
+        (server/send!
+          channel
+          (format-result request @result))))))
+
 (defn make-ring-handler
   "Takes a next-level handler, a mount point for the microservices
    (usually /methods), the service vars to expose"
@@ -175,24 +213,14 @@
       (let [[_ ns name] (re-matches regex (:uri request))]
         (if ns
           (try
-            (if-let [match (some (fn [target]
-                                   (let [{ns' :ns name' :name} (meta target)]
-                                     (when (and (= ns (str (ns-name ns'))) (= name (str name')))
-                                       target)))
-                                 service-vars)]
+            (if-let [match (search-vars service-vars ns name)]
               (if (= (:request-method request) (-> match meta :method))
-                (let [args (if (= :get (-> match meta :method))
-                             (decode-get-args request)
-                             (decode-post-args request))
-                      result (binding [*local* true]
-                               (try
-                                 ;; TODO handle async responses
-                                 @(apply match args)
-                                 (catch Exception e
-                                   {::error e})))]
-                  (format-result request result))
-                (throw (ex-info "Rpc method incorrect" {:expected (-> match meta :method)
-                                                        :got (:request-method request)})))
+                (let [args (decode-args request)
+                      result (apply-local-service-var match args)]
+                  (listenable-future->http-kit-async-result request result))
+                (throw (ex-info "Rpc method incorrect"
+                                {:expected (-> match meta :method)
+                                 :got (:request-method request)})))
               (throw (ex-info "No matching rpc"
                               {:ns ns
                                :name name
