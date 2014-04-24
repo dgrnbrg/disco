@@ -136,20 +136,37 @@
       (let [{:keys [ns name]} (meta service-var)
             content-type "application/edn"
             result (ListenablePromise. (promise) (ArrayList.) (AtomicBoolean.))
-            uri (get-uri-from-remote ns name)]
-        ;; TODO build retry strategy
-        (client/post uri
-                     {:body ((get encoders content-type) args)
-                      :headers  {"Content-Type" content-type
-                                 "Accept" "application/x-nippy"}}
-                     (fn [{:keys [body] {:keys [content-type]} :headers :as resp}]
-                       (let [r ((get decoders content-type
-                                     (fn [_] (throw (ex-info "failed to decode response" resp)))) body)]
-                         (deliver-result result (if (::error r)
-                                                  (assoc r
-                                                         ::msg "RPC Error"
-                                                         ::map resp)
-                                                  r)))))
+            uri #(get-uri-from-remote ns name)
+            post-opts {:body ((get encoders content-type) args)
+                       ::retries 10
+                       :headers  {"Content-Type" content-type
+                                  "Accept" "application/x-nippy"}}
+            handler
+            (fn handler [{:keys [body error status]
+                          {retries ::retries} :opts
+                          {:keys [content-type]} :headers
+                          :as resp}]
+              (if (and (or error
+                           (not (<= 200 status 299)))
+                       (not (zero? retries)))
+                (do (println "retry" retries)
+                    (client/post (uri)
+                                 (assoc post-opts
+                                        ::retries (dec retries))
+                                 handler
+                                 ))
+                (let [r ((get decoders content-type
+                              (fn [_]
+                                (throw
+                                  (ex-info "failed to decode response"
+                                           resp))))
+                         body)]
+                  (deliver-result result (if (::error r)
+                                           (assoc r
+                                                  ::msg "RPC Error"
+                                                  ::map resp)
+                                           r)))))]
+        (client/post (uri) post-opts handler)
         result))))
 
 (defn decode-post-args
