@@ -1,6 +1,7 @@
 (ns disco.microservices
   (:require [clojure.tools.macro :as macro]
             [org.httpkit.client :as client]
+            [clojure.core.async :as async]
             [org.httpkit.server :as server]
             [taoensso.nippy :as nippy]
             [disco.service-discovery :as sd]
@@ -63,6 +64,21 @@
                                      (nippy/freeze-to-out! (java.io.DataOutputStream. baos) obj)
                                      (java.io.ByteArrayInputStream. (.toByteArray baos))))})
 
+(defn make-listenable-future
+  []
+  (ListenablePromise. (promise) (ArrayList.) (AtomicBoolean.)))
+
+(defn async-chan->listenable-future
+  [chan]
+  (let [f (make-listenable-future)]
+    (async/go (deliver-result f (async/<! chan)))
+    f))
+
+(defn ideref->listenable-future
+  [ideref]
+  (let [f (make-listenable-future)]
+    (future (deliver-result f @ideref))
+    f))
 
 (declare remote-call)
 
@@ -70,22 +86,26 @@
   [name-sym & args]
   (let [[name-sym fntail] (macro/name-with-attributes name-sym args)
         meta-map (meta name-sym)
-        meta-map (if-not (contains? meta-map :method)
-                   (assoc meta-map :method :post)
-                   meta-map)
         name-str (name name-sym)
         internal-name (gensym name-str)
         name-sym (with-meta name-sym (assoc meta-map
                                             ::impl internal-name
-                                            ::service-fn true))]
+                                            :method (get meta-map
+                                                         :method :post)
+                                            ::service-fn true))
+        args-sym (gensym "args_")
+        local-invocation (if (or (:async meta-map)
+                                 (= :async (:tag meta-map)))
+                           `(apply ~internal-name ~args-sym)
+                           `(MockFuture. (apply ~internal-name ~args-sym)))]
     `(do
        (defn ~internal-name ~@fntail)
        (defn ~name-sym
-         [& args#]
+         [& ~args-sym]
          (cond *remote*
-               (remote-call (var ~(symbol (name (ns-name *ns*)) (name name-sym))) args#)
+               (remote-call (var ~(symbol (name (ns-name *ns*)) (name name-sym))) ~args-sym)
                *local*
-               (MockFuture. (apply ~internal-name args#))
+               ~local-invocation
                :else
                (throw (ex-info "Please set *local* or *remote* to call a service fn" {:local *local* :remote *remote*})))))))
 
@@ -219,9 +239,9 @@
                                     vars)
                                   {:port port})
         host "localhost" #_(.getHostName (java.net.InetAddress/getLocalHost))
-        services (service-var-to-service v
-                                         :address host
-                                         :port port)]
+        services (for [v vars] (service-var-to-service v
+                                                       :address host
+                                                       :port port))]
     (doseq [s services]
       (sd/register-service service-discovery s))
     (fn close []
@@ -237,20 +257,19 @@
   (println "bye bye")
   )))
 
-(defservicefn ^{:method :get} foo
+(defservicefn foo
   "Does cool stuff"
   [x y z]
   (println "bye bye")
   (+ x y z)
   )
 
-(defservicefn bar
+(defservicefn ^:async bar
   "Does cool stuff"
   [x y z]
   (println "bye bye")
   ;(throw (ex-info "lol side" {:remote *remote* :local *local*}))
-  (+ x y z)
-  )
+  (ideref->listenable-future (future (+ x y z))))
 
 ;(binding [*local* true] (add-listener (foo 1 2 3) (fn [] (println "yay!"))))
 
@@ -264,7 +283,7 @@
   (try
     (binding [*remote* "http://localhost:8090/methods/"]
     (deref (bar 1 2 7) 1000 :fail)
-    (let [r (bar 1 2 3)]
+    #_(let [r (bar 1 2 3)]
       (add-listener r (fn [] (println "Got an answer!" @r)))
       @r
       (add-listener r (fn [] (println "2nd instantly!" @r)))
