@@ -4,14 +4,17 @@
 (defn pred-search
   "Internal use only"
   [var args]
-  (let [options (-> var meta :pred-table deref)]
-    (some (fn [[p f]]
-            (when (try
-                    (apply p args)
-                    (catch clojure.lang.ArityException e
-                      false))
-              (apply f args)))
-          options)))
+  (let [options (-> var meta :pred-table deref)
+        result (some (fn [[p f]]
+                       (when (try
+                               (apply p args)
+                               (catch clojure.lang.ArityException e
+                                 false))
+                         {::result (apply f args)}))
+                     options)]
+    (if-let [r (::result result)]
+      r
+      (throw (ex-info "Couldn't find matching predicate" {:var var :args args})))))
 
 (defmacro defpred
   "Defines a function based on predicate disptach"

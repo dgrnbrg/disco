@@ -64,10 +64,15 @@
                                      (nippy/freeze-to-out! (java.io.DataOutputStream. baos) obj)
                                      (java.io.ByteArrayInputStream. (.toByteArray baos))))})
 
+
 (defn make-listenable-future
   []
   (ListenablePromise. (promise) (ArrayList.) (AtomicBoolean.)))
 
+;; TODO: these functions that are converting things
+;; to listenable futures should be included into a single
+;; predicate dispatch function, so that all conversions can
+;; be done automatically
 (defn async-chan->listenable-future
   [chan]
   (let [f (make-listenable-future)]
