@@ -4,7 +4,8 @@
            [org.apache.curator.retry RetryNTimes]
            [org.apache.curator.framework CuratorFramework]
            [org.apache.curator.framework.api.SetDataBuilder]
-           org.apache.zookeeper.KeeperException$NodeExistsException))
+           org.apache.zookeeper.KeeperException$NodeExistsException
+           org.apache.zookeeper.data.Stat))
 
 (defn close
   [^java.io.Closeable c]
@@ -34,6 +35,15 @@
        (setData)
        (withVersion version)
        (forPath path data))))
+
+(defn read-path
+  ([^CuratorFramework curator path]
+   (let [stat (Stat.)]
+     {:data (.. curator
+                (getData)
+                (storingStatIn)
+                (forPath path))
+      :stat (bean stat)})))
 
 (defprotocol IListenable
   (listen [this f] "Invokes f on every event. Returns a no-arg function that will unregister it when invoked.")
