@@ -11,6 +11,15 @@
   (:import [org.apache.curator.framework CuratorFramework]
            [org.apache.curator.test TestingServer]))
 
+(defn nginx-bin
+  "Tries to find the nginx binary"
+  []
+  (some (fn [p]
+          (when (.exists (io/file p))
+            p))
+        ["/usr/local/bin/nginx"
+         "/usr/sbin/nginx"]))
+
 (defn ring-latency-middleware
   "Middleware for simulating a slow server"
   [h latency]
@@ -84,7 +93,7 @@
       disco.nginx/default-template
       {:frob {:path "/"}}
       nginx-conf
-      "/usr/local/bin/nginx"))
+      (nginx-bin)))
 
   (nginx)
 
@@ -125,23 +134,35 @@
           (is (>= (get @port 2223) 20))
           (is (= 0 (get @port 2224 0))))
 
-        (let [nginx-bin "/usr/local/bin/nginx"
-              nginx-conf (.getAbsolutePath (io/file "nginx.conf"))
+        (let [nginx-conf (.getAbsolutePath (io/file "nginx.conf"))
               nginx
               (disco.nginx/run-nginx
                 sd
                 disco.nginx/default-template
                 {:frob {:path "/"}}
                 nginx-conf
-                nginx-bin)
-              proc (.start (ProcessBuilder. [nginx-bin "-c" nginx-conf]))
+                (nginx-bin))
+              proc-builder (doto (ProcessBuilder. [(nginx-bin) "-c" nginx-conf])
+                             (.redirectErrorStream true))
+              proc (.start proc-builder)
               num-uniq (fn []
                          (let [a (atom #{})]
                            (dotimes [i 10]
                              (swap! a conj
                                     (:body (http/get
                                              "http://localhost:10000/test"))))
-                           @a))]
+                           @a))
+              bin (java.io.BufferedReader.
+                    (java.io.InputStreamReader.
+                      (.getInputStream proc)))]
+          (doto (Thread.
+                  (fn []
+                    (while true
+                      (when-let [l (.readLine bin)]
+                        (println l))
+                      (Thread/sleep 100))))
+            (.setDaemon true)
+            (.start))
           (try
             (Thread/sleep 250)
             (is (= 1 (count (num-uniq))))

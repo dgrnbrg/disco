@@ -7,6 +7,8 @@ jvm:
 
 lein: lein2
 
+script: lein2 test; cat nginx.log
+
 before_install:
     - sudo apt-get update
     - sudo apt-get install nginx
