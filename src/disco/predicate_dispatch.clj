@@ -14,7 +14,7 @@
                      options)]
     (if-let [r (::result result)]
       r
-      (throw (ex-info "Couldn't find matching predicate" {:var var :args args})))))
+      (throw (ex-info (str "Couldn't find matching predicate" var args) {:var var :args args})))))
 
 (defmacro defpred
   "Defines a function based on predicate disptach"

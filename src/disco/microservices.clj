@@ -2,6 +2,7 @@
   (:require [clojure.tools.macro :as macro]
             [org.httpkit.client :as client]
             [clojure.core.async :as async]
+            [disco.predicate-dispatch :as pd]
             [org.httpkit.server :as server]
             [taoensso.nippy :as nippy]
             [disco.service-discovery :as sd]
@@ -15,10 +16,10 @@
 (def ^:dynamic *remote* nil)
 
 (defprotocol IListen
-  (add-listener [this f] "Registers a listener to be called when the task is ready."))
+  (add-listener [this f] "Registers a no-arg listener f to be called when the task is ready."))
 
 (defprotocol IResult
-  (deliver-result [this r] "Delivers a result to the target"))
+  (deliver-result [pending result] "Delivers a result to the given pending container"))
 
 (deftype MockFuture [value]
   clojure.lang.IBlockingDeref
@@ -65,6 +66,9 @@
                                      (java.io.ByteArrayInputStream. (.toByteArray baos))))})
 
 
+(pd/defpred to-listenable-future
+  "Converts its argument to a listenable future")
+
 (defn make-listenable-future
   []
   (ListenablePromise. (promise) (ArrayList.) (AtomicBoolean.)))
@@ -73,17 +77,29 @@
 ;; to listenable futures should be included into a single
 ;; predicate dispatch function, so that all conversions can
 ;; be done automatically
-(defn async-chan->listenable-future
-  [chan]
-  (let [f (make-listenable-future)]
-    (async/go (deliver-result f (async/<! chan)))
-    f))
+(pd/defimpl to-listenable-future
+  ([chan]
+   (instance? clojure.core.async.impl.channels.ManyToManyChannel chan))
+  ([chan]
+   (let [f (make-listenable-future)]
+     (async/go (deliver-result f (async/<! chan)))
+     f)))
 
-(defn ideref->listenable-future
-  [ideref]
-  (let [f (make-listenable-future)]
-    (future (deliver-result f @ideref))
-    f))
+(pd/defimpl to-listenable-future
+  ([ideref]
+   (or (instance? clojure.lang.IDeref ideref)
+       ;;TODO should java.util.concurrent.Future be here?
+       (instance? clojure.lang.IBlockingDeref ideref)))
+  ([ideref]
+   (let [f (make-listenable-future)]
+     (future (deliver-result f @ideref))
+     f)))
+
+(pd/defimpl to-listenable-future
+  ([mf]
+   (instance? MockFuture mf))
+  ([mf]
+   mf))
 
 (defn deferred-exception
   "Wraps an exception into a special sentinal object"
@@ -238,7 +254,8 @@
             (if-let [match (search-vars service-vars ns name)]
               (if (= (:request-method request) (-> match meta :method))
                 (let [args (decode-args request)
-                      result (apply-local-service-var match args)]
+                      result (-> (apply-local-service-var match args)
+                                 (to-listenable-future))]
                   (listenable-future->http-kit-async-result request result))
                 (throw (ex-info "Rpc method incorrect"
                                 {:expected (-> match meta :method)
@@ -299,52 +316,3 @@
         ;;TODO unregister doesn't work
         (sd/unregister-service service-discovery s))
       (server))))
-
-#_(clojure.pprint/pprint (clojure.walk/macroexpand-all
-  '(defservicefn foo
-  "Does cool stuff"
-  [x y z]
-  (println "bye bye")
-  )))
-
-(defservicefn foo
-  "Does cool stuff"
-  [x y z]
-  (println "bye bye")
-  (+ x y z)
-  )
-
-(defservicefn ^:async bar
-  "Does cool stuff"
-  [x y z]
-  (println "bye bye")
-  ;(throw (ex-info "lol side" {:remote *remote* :local *local*}))
-  (ideref->listenable-future (future (+ x y z))))
-
-;(binding [*local* true] (add-listener (foo 1 2 3) (fn [] (println "yay!"))))
-
-(comment
-  (def http-kit (server/run-server #'app {:port 8090}))
-  (http-kit)
-
-  (throw (nippy/thaw (nippy/freeze (try (throw (ex-info "lol" {})) (catch Exception e e)))))
-
-  (def app (make-ring-handler (fn [h] {:body "oops" :status 500}) "/methods" [#'bar]))
-  (try
-    (binding [*remote* "http://localhost:8090/methods/"]
-    (deref (bar 1 2 7) 1000 :fail)
-    #_(let [r (bar 1 2 3)]
-      (add-listener r (fn [] (println "Got an answer!" @r)))
-      @r
-      (add-listener r (fn [] (println "2nd instantly!" @r)))
-      ))
-    (catch Exception e
-      (println (ex-data e))
-      (clojure.stacktrace/print-cause-trace e)))
-
-  (def server (serve-ns disco.core-test/sd 'disco.microservices))
-  (server)
-  (binding [*remote* disco.core-test/sd]
-    (deref (bar 1 2 3) 100 :fail)
-    )
-  )
