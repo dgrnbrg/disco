@@ -1,0 +1,16 @@
+language: clojure
+
+jvm:
+    - openjdk7
+    - oraclejdk7
+    - openjdk6
+
+lein: lein2
+
+before_install:
+    - sudo apt-get update
+    - sudo apt-get install nginx
+
+branches:
+    only:
+        - master
