@@ -142,7 +142,7 @@
                 {:frob {:path "/"}}
                 nginx-conf
                 (nginx-bin))
-              proc-builder (doto (ProcessBuilder. [(nginx-bin) "-c" nginx-conf])
+              proc-builder (doto (ProcessBuilder. ["sudo" (nginx-bin) "-c" nginx-conf])
                              (.redirectErrorStream true))
               proc (.start proc-builder)
               num-uniq (fn []
