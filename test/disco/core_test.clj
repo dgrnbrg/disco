@@ -147,7 +147,7 @@
               proc (.start proc-builder)
               num-uniq (fn []
                          (let [a (atom #{})]
-                           (dotimes [i 10]
+                           (dotimes [i 50]
                              (swap! a conj
                                     (:body (http/get
                                              "http://localhost:10000/test"))))
@@ -167,7 +167,7 @@
             (Thread/sleep 250)
             (is (= 1 (count (num-uniq))))
             (let [s' (serve sd "frob" 2226 0)]
-              (Thread/sleep 50)
+              (Thread/sleep 100)
               (is (= 2 (count (num-uniq))))
               (s'))
             (Thread/sleep 50)
